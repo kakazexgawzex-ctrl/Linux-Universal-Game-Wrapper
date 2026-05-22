@@ -1,0 +1,110 @@
+#!/bin/bash
+
+# ===================================================
+# First-Launch Setup — Initializes Wine prefix and
+# installs dependencies (winetricks verbs from config)
+# ===================================================
+
+GREEN='\033[1;32m'
+CYAN='\033[1;36m'
+YELLOW='\033[1;33m'
+RED='\033[1;31m'
+RESET='\033[0m'
+
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+DIR="$(dirname "$SCRIPT")"
+cd "$DIR" || exit 1
+
+CONFIG="$DIR/config.ini"
+if [ ! -f "$CONFIG" ]; then
+    echo "${RED}Error: config.ini not found!${RESET}"
+    echo "Run ${CYAN}./auto-setup${RESET} or ${CYAN}./configure${RESET} to create one."
+    exit 1
+fi
+
+ini_get() {
+    local s="$1" k="$2"
+    sed -n "/^\[$s\]/I,/^\[/Ip" "$CONFIG" | grep -i "^$k\s*=" | head -1 | cut -d= -f2- | sed 's/^ *//;s/ *$//'
+}
+
+GAME_NAME="$(ini_get Game name)"
+VERBS="$(ini_get Dependencies verbs)"
+RUNNER_TYPE="$(ini_get Runner type)"
+RUNNER_PATH="$(ini_get Runner path)"
+RUNNER_BINARY="$(ini_get Runner binary)"
+
+[ -z "$GAME_NAME" ] && GAME_NAME="Game"
+[ -z "$RUNNER_TYPE" ] && RUNNER_TYPE="bundled"
+[ -z "$RUNNER_PATH" ] && RUNNER_PATH="runner"
+[ -z "$RUNNER_BINARY" ] && RUNNER_BINARY="wine"
+
+export HOME="$DIR/home"
+export WINEPREFIX="$DIR/prefix"
+
+echo "${CYAN}========================================${RESET}"
+echo "${CYAN}  First-Launch Setup: $GAME_NAME${RESET}"
+echo "${CYAN}========================================${RESET}"
+echo
+
+if [ "$RUNNER_TYPE" = "system" ]; then
+    WINE="$(command -v "$RUNNER_BINARY")"
+    if [ -z "$WINE" ]; then
+        echo "${RED}Error: $RUNNER_BINARY not found in PATH${RESET}"
+        echo "Install Wine or run ${CYAN}./download-runner${RESET} to get a bundled runner."
+        exit 1
+    fi
+    WINETRICKS="$(command -v winetricks)"
+    if [ -z "$WINETRICKS" ]; then
+        echo "${RED}Error: winetricks not found in PATH${RESET}"
+        echo "Install winetricks or use a bundled runner (./download-runner)."
+        exit 1
+    fi
+else
+    WINE="$DIR/$RUNNER_PATH/$RUNNER_BINARY"
+    if [ ! -f "$WINE" ]; then
+        echo "${RED}Error: Runner not found at $WINE${RESET}"
+        echo "Download one with ${CYAN}./download-runner${RESET},"
+        echo "or extract one into the 'runner' folder,"
+        echo "or set ${CYAN}[Runner] type=system${RESET} in config.ini."
+        exit 1
+    fi
+    WINETRICKS="$DIR/winetools/winetricks"
+    if [ ! -f "$WINETRICKS" ]; then
+        echo "${YELLOW}Downloading winetricks...${RESET}"
+        mkdir -p "$DIR/winetools"
+        curl -sL "https://raw.githubusercontent.com/Winetricks/winetricks/master/src/winetricks" -o "$WINETRICKS" || {
+            echo "${RED}Failed to download winetricks. Check internet connection.${RESET}"
+            exit 1
+        }
+        chmod +x "$WINETRICKS"
+        echo "${GREEN}Winetricks downloaded.${RESET}"
+    fi
+fi
+
+# Bootstrap prefix
+if [ ! -d "$WINEPREFIX/drive_c" ]; then
+    echo "  ${YELLOW}►${RESET} Creating Wine prefix..."
+    if echo "$RUNNER_BINARY" | grep -qi proton; then
+        WINEDEBUG="-all" "$WINE" run wineboot -u 2>/dev/null || true
+    else
+        WINEDEBUG="-all" "$WINE" wineboot -u 2>/dev/null
+    fi
+    echo "  ${GREEN}✔ Prefix created.${RESET}"
+else
+    echo "  ${GREEN}✔ Wine prefix already exists.${RESET}"
+fi
+
+# Install dependencies
+if [ -n "$VERBS" ]; then
+    echo "  ${YELLOW}►${RESET} Installing dependencies: ${CYAN}$VERBS${RESET} (this may take a while)..."
+    export WINE="$WINE"
+    # shellcheck disable=SC2086
+    WINEDLLOVERRIDES="mscoree,mshtml=" WINEDEBUG="-all" "$WINETRICKS" -q $VERBS
+    echo "  ${GREEN}✔ Dependencies installed.${RESET}"
+fi
+
+echo
+echo "${GREEN}========================================${RESET}"
+echo "${GREEN}  Setup complete! Run ./start to play.${RESET}"
+echo "${GREEN}========================================${RESET}"
+echo "Support the project: https://ko-fi.com/watrib"
