@@ -1,9 +1,0 @@
-#!/bin/bash
-DIR="$(dirname "$(realpath "$0")")/.."
-export HOME="$DIR/home"
-export WINEPREFIX="$DIR/prefix"
-export WINEDEBUG="-all"
-WINE="$DIR/runner/wine"
-[ ! -f "$WINE" ] && WINE="$(command -v wine)"
-[ -z "$WINE" ] && { echo "Wine not found."; exit 1; }
-"$DIR/runner/winecfg" 2>/dev/null || "$WINE" winecfg
