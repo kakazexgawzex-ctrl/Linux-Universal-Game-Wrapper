@@ -1,0 +1,65 @@
+#!/bin/bash
+
+# ===================================================
+# Configuration Helper — Interactive config.ini editor
+# ===================================================
+
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+DIR="$(dirname "$SCRIPT")"
+CONFIG="$DIR/config.ini"
+
+[ ! -f "$CONFIG" ] && { echo "config.ini not found!"; exit 1; }
+
+ini_set() {
+    local section="$1" key="$2" value="$3"
+    if grep -qi "^\[$section\]" "$CONFIG"; then
+        sed -i "/^\[$section\]/,/^\[/s/^$key\s*=.*/$key=$value/I" "$CONFIG"
+    fi
+}
+
+ini_get() {
+    local s="$1" k="$2"
+    sed -n "/^\[$s\]/,/^\[/p" "$CONFIG" | grep -i "^$k\s*=" | head -1 | cut -d= -f2- | sed 's/^ *//;s/ *$//'
+}
+
+if command -v zenity &>/dev/null; then
+    # GUI mode
+    NAME=$(zenity --entry --title="Game Name" --text="Game name:" --entry-text="$(ini_get Game name)")
+    [ -n "$NAME" ] && ini_set Game name "$NAME"
+
+    EXE=$(zenity --entry --title="Game EXE" --text="Executable filename:" --entry-text="$(ini_get Game exe)")
+    [ -n "$EXE" ] && ini_set Game exe "$EXE"
+
+    RES=$(zenity --entry --title="Resolution" --text="Resolution (auto or WxH):" --entry-text="$(ini_get Display resolution)")
+    [ -n "$RES" ] && ini_set Display resolution "$RES"
+
+    WND=$(zenity --list --title="Window Mode" --text="Windowed?" --radiolist --column="" --column="Option" FALSE yes FALSE no --height=200)
+    [ -n "$WND" ] && ini_set Display windowed "$WND"
+
+    DEPS=$(zenity --entry --title="Dependencies" --text="Winetricks verbs (space-separated):" --entry-text="$(ini_get Dependencies verbs)")
+    [ -n "$DEPS" ] && ini_set Dependencies verbs "$DEPS"
+
+    zenity --info --text="Configuration saved!"
+else
+    # TUI mode
+    echo "=== Configuration Helper ==="
+    echo "Leave blank to keep current value."
+    echo
+
+    read -r -p "Game name [$(ini_get Game name)]: " val
+    [ -n "$val" ] && ini_set Game name "$val"
+
+    read -r -p "Executable filename [$(ini_get Game exe)]: " val
+    [ -n "$val" ] && ini_set Game exe "$val"
+
+    read -r -p "Resolution (auto or WxH) [$(ini_get Display resolution)]: " val
+    [ -n "$val" ] && ini_set Display resolution "$val"
+
+    read -r -p "Windowed (yes/no) [$(ini_get Display windowed)]: " val
+    [ -n "$val" ] && ini_set Display windowed "$val"
+
+    read -r -p "Dependencies (winetricks verbs) [$(ini_get Dependencies verbs)]: " val
+    [ -n "$val" ] && ini_set Dependencies verbs "$val"
+
+    echo "Configuration saved!"
+fi

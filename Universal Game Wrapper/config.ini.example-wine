@@ -1,0 +1,23 @@
+[Game]
+name = GAME_NAME_HERE
+exe = Game.exe
+version = 1.0
+
+[Runner]
+# For Wine-GE: set path to the release folder (e.g. "runner/wine-ge-8-25")
+type = bundled
+path = runner/wine-ge-8-25
+binary = wine
+
+[Display]
+resolution = auto
+windowed = no
+fix_resolution = no
+
+[Dependencies]
+verbs = vcrun2022
+
+[Performance]
+esync = yes
+fsync = no
+gamemode = auto

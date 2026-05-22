@@ -1,0 +1,23 @@
+[Game]
+name = GAME_NAME_HERE
+exe = Game.exe
+version = 1.0
+
+[Runner]
+# For Proton-GE: set path to the release folder (e.g. "runner/GE-Proton9-25/files")
+type = bundled
+path = runner/GE-Proton9-25/files
+binary = proton
+
+[Display]
+resolution = auto
+windowed = no
+fix_resolution = no
+
+[Dependencies]
+verbs = vcrun2022
+
+[Performance]
+esync = yes
+fsync = no
+gamemode = auto

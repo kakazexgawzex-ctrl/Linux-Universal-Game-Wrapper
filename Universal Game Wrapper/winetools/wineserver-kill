@@ -1,0 +1,5 @@
+#!/bin/bash
+DIR="$(dirname "$(realpath "$0")")/.."
+export WINEPREFIX="$DIR/prefix"
+"$DIR/runner/wineserver" -k 2>/dev/null || wineserver -k 2>/dev/null
+echo "All Wine processes killed."

@@ -1,0 +1,8 @@
+#!/bin/bash
+DIR="$(dirname "$(realpath "$0")")/.."
+export HOME="$DIR/home"
+export WINEPREFIX="$DIR/prefix"
+export WINEDEBUG="-all"
+WINE="$DIR/runner/wine"
+[ ! -f "$WINE" ] && WINE="$(command -v wine)"
+"$DIR/runner/regedit" 2>/dev/null || "$WINE" regedit

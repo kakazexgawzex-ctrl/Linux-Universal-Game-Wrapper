@@ -1,0 +1,176 @@
+#!/bin/bash
+
+# ===================================================
+# Universal Portable Game Wrapper
+# ===================================================
+
+# Forbid root
+if [ "$EUID" == "0" ]; then
+    echo "Do not run this script as root!"
+    exit 1
+fi
+
+# --- Script directory ---
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+DIR="$(dirname "$SCRIPT")"
+cd "$DIR" || exit 1
+
+# --- Dependency check ---
+missing_warn=""
+command -v xrandr  &>/dev/null || missing_warn="$missing_warn xrandr"
+command -v curl    &>/dev/null || missing_warn="$missing_warn curl"
+command -v tar     &>/dev/null || missing_warn="$missing_warn tar"
+command -v gamemoderun &>/dev/null || missing_warn="$missing_warn gamemoderun(libgamemode)"
+command -v powerprofilesctl &>/dev/null || missing_warn="$missing_warn power-profiles-daemon"
+if [ -n "$missing_warn" ]; then
+    echo "Warning: missing optional tools:$missing_warn"
+    echo "(Game should still run, but some features may not work)"
+    sleep 1
+fi
+
+# --- Read config ---
+CONFIG="$DIR/config.ini"
+if [ ! -f "$CONFIG" ]; then
+    echo "Error: config.ini not found!"
+    echo "Copy config.ini.example to config.ini and edit it."
+    exit 1
+fi
+
+# Helper to read INI values
+ini_get() {
+    local section="$1"
+    local key="$2"
+    sed -n "/^\[$section\]/,/^\[/p" "$CONFIG" | grep -i "^$key\s*=" | head -1 | cut -d= -f2- | sed 's/^ *//;s/ *$//'
+}
+
+GAME_NAME="$(ini_get Game name)"
+EXE="$(ini_get Game exe)"
+GAME_VERSION="$(ini_get Game version)"
+RUNNER_TYPE="$(ini_get Runner type)"
+RUNNER_PATH="$(ini_get Runner path)"
+RUNNER_BINARY="$(ini_get Runner binary)"
+RESOLUTION="$(ini_get Display resolution)"
+WINDOWED="$(ini_get Display windowed)"
+FIXRES="$(ini_get Display fix_resolution)"
+ESYNC="$(ini_get Performance esync)"
+FSYNC="$(ini_get Performance fsync)"
+GAMEMODE="$(ini_get Performance gamemode)"
+
+# Defaults
+[ -z "$GAME_NAME" ] && GAME_NAME="Game"
+[ -z "$EXE" ] && EXE="Game.exe"
+[ -z "$RUNNER_TYPE" ] && RUNNER_TYPE="bundled"
+[ -z "$RUNNER_PATH" ] && RUNNER_PATH="runner"
+[ -z "$RUNNER_BINARY" ] && RUNNER_BINARY="wine"
+[ -z "$RESOLUTION" ] && RESOLUTION="auto"
+[ -z "$WINDOWED" ] && WINDOWED="no"
+[ -z "$FIXRES" ] && FIXRES="no"
+[ -z "$ESYNC" ] && ESYNC="yes"
+[ -z "$FSYNC" ] && FSYNC="no"
+
+# --- Directories ---
+export HOME="$DIR/home"
+export WINEPREFIX="$DIR/prefix"
+export GAME_FOLDER="$DIR/game_data"
+
+# --- Locate runner ---
+if [ "$RUNNER_TYPE" = "system" ]; then
+    WINE="$(command -v "$RUNNER_BINARY")"
+    REGEDIT="$(command -v regedit)"
+    [ -z "$WINE" ] && { echo "Error: $RUNNER_BINARY not found in system PATH"; exit 1; }
+else
+    # bundled or proton
+    WINE="$DIR/$RUNNER_PATH/$RUNNER_BINARY"
+    REGEDIT="$DIR/$RUNNER_PATH/regedit"
+    if [ ! -f "$WINE" ]; then
+        echo "Error: Runner not found at $WINE"
+        echo "Place Wine/Proton binaries in the '$RUNNER_PATH' folder or set [Runner] type=system in config.ini"
+        exit 1
+    fi
+fi
+
+# --- Performance env vars ---
+[ "$ESYNC" = "yes" ] && export WINEESYNC=1
+[ "$FSYNC" = "yes" ] && export WINEFSYNC=1
+export STAGING_SHARED_MEMORY=1
+export mesa_glthread=true
+export MESA_NO_ERROR=1
+export SDL_VIDEO_X11_NET_WM_BYPASS_COMPOSITOR=1
+export WINEDEBUG="-all"
+export WINEDLLOVERRIDES="mscoree,mshtml="
+
+# --- Caches ---
+export MESA_SHADER_CACHE_PATH="$DIR/cache"
+export __GL_SHADER_DISK_CACHE_PATH="$DIR/cache"
+export DXVK_STATE_CACHE_PATH="$DIR/cache"
+export XDG_CACHE_HOME="$DIR/cache"
+
+# --- PulseAudio ---
+export PULSE_LATENCY_MSEC=90
+
+# --- Limits ---
+ulimit -n 1048576 2>/dev/null
+
+# --- Performance power profile ---
+command -v powerprofilesctl &>/dev/null && powerprofilesctl set performance 2>/dev/null
+
+# --- Create home if missing ---
+mkdir -p "$HOME"
+mkdir -p "$WINEPREFIX"
+mkdir -p "$DIR/cache"
+
+# --- Copy pulse config ---
+if [ ! -d "$HOME/.config/pulse" ] && [ -d "$HOME/.config/pulse" ]; then
+    mkdir -p "$HOME/.config"
+    cp -R "$HOME/.config/pulse" "$HOME/.config" 2>/dev/null
+fi
+
+# --- Get native resolution ---
+if [ "$RESOLUTION" = "auto" ]; then
+    RESOLUTION="$(xrandr -q 2>/dev/null | awk -F'current' -F',' 'NR==1{gsub("( |current)","");print $2}')"
+    [ -z "$RESOLUTION" ] && RESOLUTION="1366x768"
+fi
+if [ "$FIXRES" = "yes" ] && [ "$WINDOWED" != "yes" ]; then
+    ORIGINAL_RES="$RESOLUTION"
+fi
+
+# --- Check game exists ---
+if [ ! -f "$GAME_FOLDER/$EXE" ]; then
+    echo "Error: $GAME_FOLDER/$EXE not found!"
+    echo "Place your game files in the 'game_data' folder."
+    exit 1
+fi
+
+# --- Launch ---
+clear
+echo "$GAME_NAME v$GAME_VERSION — Portable Wine Wrapper"
+echo "========================================"
+echo "Runner: $("$WINE" --version 2>/dev/null || echo "unknown")"
+echo "Prefix: $WINEPREFIX"
+echo "Game:   $GAME_FOLDER/$EXE"
+echo
+
+# Detect gamemode
+RUNNER_CMD=""
+if [ "$GAMEMODE" = "auto" ] && command -v gamemoderun &>/dev/null; then
+    RUNNER_CMD="gamemoderun"
+elif [ "$GAMEMODE" = "yes" ]; then
+    if command -v gamemoderun &>/dev/null; then
+        RUNNER_CMD="gamemoderun"
+    else
+        echo "Warning: gamemode requested but not installed."
+    fi
+fi
+
+cd "$GAME_FOLDER" || exit 1
+
+if [ "$WINDOWED" = "yes" ] || [ "$1" = "-sw" ]; then
+    $RUNNER_CMD "$WINE" explorer /desktop=Game,"$RESOLUTION" "$EXE" "$@"
+else
+    $RUNNER_CMD "$WINE" "$EXE" "$@"
+fi
+
+# Restore resolution if needed
+if [ -n "$ORIGINAL_RES" ]; then
+    xrandr -s "$ORIGINAL_RES" 2>/dev/null
+fi
