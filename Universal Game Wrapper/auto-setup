@@ -1,0 +1,232 @@
+#!/bin/bash
+set -euo pipefail
+
+trap 'printf "\n${YELLOW}Setup cancelled.${RESET}\n"; exit 1' INT
+
+SCRIPT="$(readlink -f "${BASH_SOURCE[0]}")"
+DIR="$(dirname "$SCRIPT")"
+CONFIG="$DIR/config.ini"
+GAME_DATA="$DIR/game_data"
+RUNNER_DIR="$DIR/runner"
+
+RED='\033[1;31m'; GREEN='\033[1;32m'; YELLOW='\033[1;33m'; CYAN='\033[1;36m'; RESET='\033[0m'
+
+printf "${CYAN}========================================${RESET}\n"
+printf "${CYAN}  Universal Game Wrapper — Auto Setup${RESET}\n"
+printf "${CYAN}========================================${RESET}\n"
+printf "\n"
+
+if [ ! -f "$CONFIG" ]; then
+    printf "${YELLOW}config.ini not found, creating with defaults...${RESET}\n"
+    cat > "$CONFIG" <<-EOF
+	[Game]
+	name = GAME_NAME_HERE
+	exe = Game.exe
+	version = 1.0
+
+	[Runner]
+	type = bundled
+	path = runner
+	binary = wine
+
+	[Display]
+	resolution = auto
+	windowed = no
+	fix_resolution = no
+
+	[Dependencies]
+	verbs = vcrun2022
+
+	[Performance]
+	esync = yes
+	fsync = no
+	gamemode = auto
+	EOF
+    printf "${GREEN}Created config.ini with default values.${RESET}\n"
+fi
+
+ini_get() {
+    local s="$1" k="$2"
+    sed -n "/^\[$s\]/I,/^\[.*\]/Ip" "$CONFIG" 2>/dev/null | grep -i "^$k\s*=" | head -1 | cut -d= -f2- | sed 's/^ *//;s/ *$//'
+}
+ini_set() {
+    local section="$1" key="$2" value="$3"
+    if grep -qi "^\[$section\]" "$CONFIG" 2>/dev/null; then
+        value="$(printf '%s\n' "$value" | sed 's/[&/\]/\\&/g')"
+        sed -i "/^\[$section\]/,/^\[.*\]/s|^$key\s*=.*|$key = $value|I" "$CONFIG"
+    fi
+}
+
+for dir in runner game_data prefix home cache; do
+    [ -d "$DIR/$dir" ] || { mkdir -p "$DIR/$dir" && printf "${GREEN}Created missing folder: %s${RESET}\n" "$dir"; }
+done
+
+printf "${CYAN}Scanning for Wine/Proton runners...${RESET}\n"
+BINARY=""
+R_PATH=""
+if [ -d "$RUNNER_DIR" ]; then
+    for proto in "$RUNNER_DIR"/*/files/bin/wine64 "$RUNNER_DIR"/*/files/bin/wine "$RUNNER_DIR"/*/bin/wine64 "$RUNNER_DIR"/*/bin/wine; do
+        [ -f "$proto" ] && { R_PATH="$(realpath --relative-to="$DIR" "$(dirname "$proto")" 2>/dev/null || echo "$(dirname "$proto")")"; BINARY="$(basename "$proto")"; break; }
+    done
+    if [ -z "$BINARY" ]; then
+        for proto in "$RUNNER_DIR"/*/wine64 "$RUNNER_DIR"/*/wine; do
+            [ -f "$proto" ] && { R_PATH="$(realpath --relative-to="$DIR" "$(dirname "$proto")" 2>/dev/null || echo "$(dirname "$proto")")"; BINARY="$(basename "$proto")"; break; }
+        done
+    fi
+    if [ -n "$BINARY" ]; then
+        ini_set Runner path "$R_PATH"
+        ini_set Runner binary "$BINARY"
+        ini_set Runner type "bundled"
+        printf "${GREEN}Runner found: %s (%s)${RESET}\n" "$R_PATH" "$BINARY"
+    else
+        printf "${YELLOW}No bundled runners found.${RESET}\n"
+        printf "  Run ./download-runner to get one,\n"
+        printf "  or set [Runner] type=system in config.ini to use system Wine.\n"
+        printf "\n"
+        read -r -p "Use system Wine instead? (y/N): " sys
+        if [ "$sys" = "y" ] || [ "$sys" = "Y" ]; then
+            ini_set Runner type "system"
+            ini_set Runner path ""
+            ini_set Runner binary "wine"
+            printf "${GREEN}Will use system Wine.${RESET}\n"
+        fi
+    fi
+else
+    printf "${YELLOW}No runner folder found.${RESET}\n"
+    printf "  Run ./download-runner to download a runner first.\n"
+fi
+
+printf "${CYAN}Looking for game files...${RESET}\n"
+
+EXES=()
+while IFS= read -r -d '' f; do
+    EXES+=("$(basename "$f")")
+done < <(find "$GAME_DATA" -maxdepth 1 -type f \( -name "*.exe" -o -name "*.EXE" \) -print0 2>/dev/null | sort -z)
+
+CUR_EXE="$(ini_get Game exe)"
+
+if [ ${#EXES[@]} -gt 0 ]; then
+    printf "${GREEN}Found %d executable(s) in game_data/:${RESET}\n" "${#EXES[@]}"
+    for i in "${!EXES[@]}"; do
+        printf "  %d) %s\n" $((i+1)) "${EXES[$i]}"
+    done
+    echo
+    read -r -p "Select game exe number (or press Enter to keep '${CUR_EXE:-Game.exe}'): " choice
+    if [ -n "$choice" ] && [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#EXES[@]}" ]; then
+        ini_set Game exe "${EXES[$((choice-1))]}"
+        GNAME="$(basename "${EXES[$((choice-1))]}" .exe)"
+        ini_set Game name "$GNAME"
+        printf "${GREEN}Game exe set to: %s${RESET}\n" "${EXES[$((choice-1))]}"
+    fi
+    echo
+    read -r -p "Got games already but wanna copy more from somewhere? (path or Enter to skip): " copy_path
+    if [ -n "$copy_path" ]; then
+        copy_path="${copy_path/#\~/$HOME}"
+        if [ -d "$copy_path" ]; then
+            printf "${CYAN}Copying files from %s to game_data/...${RESET}\n" "$copy_path"
+            cp -r "$copy_path"/* "$GAME_DATA"/ 2>/dev/null || cp -r "$copy_path"/. "$GAME_DATA"/ 2>/dev/null || printf "${YELLOW}Couldnt copy files, check the path.${RESET}\n"
+            printf "${GREEN}Done!${RESET}\n"
+            EXES=()
+            while IFS= read -r -d '' f; do
+                EXES+=("$(basename "$f")")
+            done < <(find "$GAME_DATA" -maxdepth 1 -type f \( -name "*.exe" -o -name "*.EXE" \) -print0 2>/dev/null | sort -z)
+            if [ ${#EXES[@]} -gt 0 ]; then
+                printf "${GREEN}Now found %d executable(s) in game_data/:${RESET}\n" "${#EXES[@]}"
+                for i in "${!EXES[@]}"; do
+                    printf "  %d) %s\n" $((i+1)) "${EXES[$i]}"
+                done
+                read -r -p "Select game exe number (or press Enter to keep current): " choice2
+                if [ -n "$choice2" ] && [ "$choice2" -ge 1 ] 2>/dev/null && [ "$choice2" -le "${#EXES[@]}" ]; then
+                    ini_set Game exe "${EXES[$((choice2-1))]}"
+                    GNAME="$(basename "${EXES[$((choice2-1))]}" .exe)"
+                    ini_set Game name "$GNAME"
+                    printf "${GREEN}Game exe set to: %s${RESET}\n" "${EXES[$((choice2-1))]}"
+                fi
+            fi
+        else
+            printf "${YELLOW}That path doesnt exist or isnt a directory.${RESET}\n"
+        fi
+    fi
+else
+    printf "${YELLOW}No .exe files found in game_data/.${RESET}\n"
+    echo
+    read -r -p "Got a game folder somewhere? paste the path and ill copy it (e.g. ~/.local/share/steam/steamapps/common/Cry of Fear) or just press Enter to skip: " copy_path
+    if [ -n "$copy_path" ]; then
+        copy_path="${copy_path/#\~/$HOME}"
+        if [ -d "$copy_path" ]; then
+            printf "${CYAN}Copying files from %s to game_data/...${RESET}\n" "$copy_path"
+            cp -r "$copy_path"/* "$GAME_DATA"/ 2>/dev/null || cp -r "$copy_path"/. "$GAME_DATA"/ 2>/dev/null || { printf "${YELLOW}Couldnt copy files, check the path.${RESET}\n"; }
+            printf "${GREEN}Done! Rescanning...${RESET}\n"
+            EXES=()
+            while IFS= read -r -d '' f; do
+                EXES+=("$(basename "$f")")
+            done < <(find "$GAME_DATA" -maxdepth 1 -type f \( -name "*.exe" -o -name "*.EXE" \) -print0 2>/dev/null | sort -z)
+        else
+            printf "${YELLOW}That path doesnt exist or isnt a directory.${RESET}\n"
+        fi
+    fi
+
+    if [ ${#EXES[@]} -gt 0 ]; then
+        printf "${GREEN}Found %d executable(s):${RESET}\n" "${#EXES[@]}"
+        for i in "${!EXES[@]}"; do
+            printf "  %d) %s\n" $((i+1)) "${EXES[$i]}"
+        done
+        read -r -p "Select game exe number: " choice
+        if [ -n "$choice" ] && [ "$choice" -ge 1 ] 2>/dev/null && [ "$choice" -le "${#EXES[@]}" ]; then
+            ini_set Game exe "${EXES[$((choice-1))]}"
+            GNAME="$(basename "${EXES[$((choice-1))]}" .exe)"
+            ini_set Game name "$GNAME"
+            printf "${GREEN}Game exe set to: %s${RESET}\n" "${EXES[$((choice-1))]}"
+        fi
+    else
+        read -r -p "Enter the exe filename manually (e.g. Game.exe) [${CUR_EXE:-Game.exe}]: " exe
+        [ -z "$exe" ] && exe="${CUR_EXE:-Game.exe}"
+        ini_set Game exe "$exe"
+        GNAME="$(basename "$exe" .exe)"
+        [ -n "$GNAME" ] && ini_set Game name "$GNAME"
+        printf "${GREEN}Game exe set to: %s${RESET}\n" "$exe"
+    fi
+fi
+echo
+
+CUR_NAME="$(ini_get Game name)"
+read -r -p "Game name [${CUR_NAME:-Game}]: " name
+[ -n "$name" ] && ini_set Game name "$name"
+echo
+
+CUR_DEPS="$(ini_get Dependencies verbs)"
+read -r -p "Extra DLLs to install (space-separated, e.g. vcrun2022 d3dx9) [${CUR_DEPS:-vcrun2022}]: " deps
+if [ -n "$deps" ]; then
+    ini_set Dependencies verbs "$deps"
+elif [ -z "$CUR_DEPS" ]; then
+    ini_set Dependencies verbs "vcrun2022"
+fi
+echo
+
+printf "${CYAN}========================================${RESET}\n"
+printf "${CYAN}  Configuration Summary${RESET}\n"
+printf "${CYAN}========================================${RESET}\n"
+echo "  Game name:      $(ini_get Game name)"
+echo "  Executable:     $(ini_get Game exe)"
+echo "  Runner type:    $(ini_get Runner type)"
+echo "  Runner path:    $(ini_get Runner path)"
+echo "  Runner binary:  $(ini_get Runner binary)"
+echo "  Resolution:     $(ini_get Display resolution)"
+echo "  Dependencies:   $(ini_get Dependencies verbs)"
+echo
+
+read -r -p "Run first-launch now? (sets up Wine prefix, installs DLLs) (Y/n): " run_fl
+if [ "$run_fl" != "n" ] && [ "$run_fl" != "N" ]; then
+    echo
+    printf "${CYAN}Running first-launch...${RESET}\n"
+    "$DIR/first-launch"
+    echo
+    printf "${GREEN}Setup complete! Run ./start to play.${RESET}\n"
+else
+    echo
+    printf "${GREEN}Configuration saved! When ready, run:${RESET}\n"
+    echo "  ./first-launch   (one-time setup)"
+    echo "  ./start          (play the game)"
+fi
+echo
+printf "${GREEN}Support the project: https://ko-fi.com/watrib${RESET}\n"

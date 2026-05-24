@@ -1,0 +1,15 @@
+#!/bin/bash
+DIR="$(dirname "$(realpath "$0")")/.."
+export HOME="$DIR/home"
+export WINEPREFIX="$DIR/prefix"
+
+CONFIG="$DIR/config.ini"
+ini_get() {
+    local s="$1" k="$2"
+    sed -n "/^\[$s\]/I,/^\[/Ip" "$CONFIG" | grep -i "^$k\s*=" | head -1 | cut -d= -f2- | sed 's/^ *//;s/ *$//'
+}
+RPATH="$(ini_get Runner path)"
+[ -z "$RPATH" ] && RPATH="runner"
+
+"$DIR/$RPATH/wineserver" -k 2>/dev/null || wineserver -k 2>/dev/null
+echo "All Wine processes killed."
